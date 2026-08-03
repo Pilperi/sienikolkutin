@@ -1,4 +1,5 @@
-# Ei heksoja sun muita
+.tmp
 *.hex
 *.obj
 /.vscode
+build_artifacts/
