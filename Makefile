@@ -1,6 +1,8 @@
-# 2026-08-03
+# 2026-08-04
 
-#########################################################################
+################################################################################
+# Targetit
+
 .PHONY: all
 .PHONY: build
 .PHONY: newbin
@@ -8,13 +10,12 @@
 .PHONY: clear
 .PHONY: show
 .PHONY: send
+.PHONY: list
 
 
-#########################################################################
-#
+################################################################################
 # Perusmääritykset: kohdekansiot, käännösflagit ymv
-#
-#########################################################################
+
 SHELL=/bin/bash
 
 # Kohteen suoritinarkkitehtuuri
@@ -29,13 +30,21 @@ KOHDEKANSIO=build_artifacts
 KOHDEBIN=$(KOHDEKANSIO)/ulos.bin
 KOHDE_ELF=$(KOHDEKANSIO)/ulos.elf
 
+# Koodissa kiinnitetyt rekisterit (käyttö globaaleina muuttujina)
+FIXREG :=
+FIXREG += 5
+FIXREG += 6
+FIXREG += 7
+FIXREG += 8
+
+
 # Assemblyn kääntäjä ja sen vaatimat argumentit (suorittimen tyyppi ymv)
 # !! avr-as on olemassa mutta se tekee jotain ihan muuta älä käytä
 COMP_AS=avr-gcc
 COMPFLAGS_AS=-mmcu=$(MMCU) -Os -c -I lib -I include/**
 # C-kääntäjä ja sen vaatimat argumentit
 COMP_CC=avr-gcc
-COMPFLAGS_C=-mmcu=$(MMCU) -Os -c -I lib -I include/**
+COMPFLAGS_C=-mmcu=$(MMCU) -Os -c -I lib -I include/** $(addprefix -ffixed-,$(FIXREG))
 
 # Binäärin pyörittely eri muodoissa (elf -> bin)
 BINCOPY=avr-objcopy
@@ -46,33 +55,49 @@ LINKERSCRIPT=linker.ld
 LINKER=avr-ld
 LINKERFLAGS=-T $(LINKERSCRIPT)
 
+################################################################################
+# Tiedostot
+
 # Lista kaikesta C-lähdekoodista
 C_SOURCES := $(shell find $(KOODIKANSIO) -name '*.c')
 C_FILENAMES := $(notdir $(C_SOURCES))
+
 # Lista assembly-lähdekoodista
 S_SOURCES := $(shell find $(KOODIKANSIO) -name '*.S')
 S_FILENAMES := $(notdir $(S_SOURCES))
+
 # Käännetyt versiot
-# C:stä käännetyt .c.o ja assemblystä .S.o ja nämä uudelleennimetään myöhemmin sitten .o
+# C:stä käännetyt .c.o ja assemblystä .S.o ja näistä valkataan lopulta .o
 C_OBJECTS := $(addprefix $(KOHDEKANSIO)/,$(C_FILENAMES:%.c=%.c.o))
 S_OBJECTS := $(addprefix $(KOHDEKANSIO)/,$(S_FILENAMES:%.S=%.S.o))
 
-# Mitkä tulokset otetaan C-koodista ja mitkä assemblystä
-O_OBJECTS_FROM_C = $(KOHDEKANSIO)/main.o $(KOHDEKANSIO)/shiftreg.o
-O_OBJECTS_FROM_S = $(KOHDEKANSIO)/init.o $(KOHDEKANSIO)/isr.o $(KOHDEKANSIO)/isr_pcint0.o $(KOHDEKANSIO)/debug_koputukset_sregiin.o
+# Jos tiedosto on olemassa pelkästään assembly- tai C-muodossa, käytetään sitä.
+# Jos molemmissa, käytetään oletuksena C-versiota, paitsi jos erikseen
+# speksattu että otetaan assembly-toteutus (ks. alempana esimerkki)
+O_OBJECTS_FROM_S_FILENAMES := $(filter-out $(C_FILENAMES:%.c=%.o),$(S_FILENAMES:%.S=%.o))
+
+# Erikseen speksattu olemaan assembly-koodista:
+#O_OBJECTS_FROM_S_FILENAMES += kissa.o       # esimerkki
+#O_OBJECTS_FROM_S_FILENAMES += hevonen.o     # esimerkki
+
+# Poista C-tiedostojen listasta asiat jotka speksattu olemaan assemblyversioita
+# ja assembly-listasta asiat jotka speksaamatta assemblyversioiksi.
+O_OBJECTS_FROM_C = $(addprefix $(KOHDEKANSIO)/,$(filter-out $(O_OBJECTS_FROM_S_FILENAMES),$(C_FILENAMES:%.c=%.o)))
+O_OBJECTS_FROM_S = $(addprefix $(KOHDEKANSIO)/,$(O_OBJECTS_FROM_S_FILENAMES))
+
 # Kirjastot jotka otetaan mukaan
 LIBS = 
 
-#########################################################################
+
+################################################################################
+# Targettien toteutukset
 
 all: $(KOHDEKANSIO) newbin $(C_OBJECTS) $(S_OBJECTS) $(KOHDEBIN) $(LINKERSCRIPT)
 build: all
 
-#########################################################################
-#
+################################################################################
 # Kohdetiedostojen hallinta: putsaus- ja printtioperaatiot ymv
-#
-#########################################################################
+
 
 # Build-kansion luonti jos uupuu
 $(KOHDEKANSIO):
@@ -112,8 +137,8 @@ else
 	@echo $(KOHDEKANSIO) on jo tyhjä
 endif
 
-# Näytä mitä tuli
-show:
+# Listaa tiedostot
+list:
 	@echo 
 	@echo C_SOURCES $(C_SOURCES)
 	@echo C_OBJECTS $(C_OBJECTS)
@@ -121,6 +146,11 @@ show:
 	@echo S_OBJECTS $(S_OBJECTS)
 	@echo O_OBJECTS_FROM_C $(O_OBJECTS_FROM_C)
 	@echo O_OBJECTS_FROM_S $(O_OBJECTS_FROM_S)
+	@echo O_OBJECTS_FROM_C_FILT $(O_OBJECTS_FROM_C_FILT)
+	@echo O_OBJECTS_FROM_S_FILT $(O_OBJECTS_FROM_S_FILT)
+
+# Näytä mitä tuli
+show: list
 	test -f $(KOHDE_ELF) && (echo; echo ELF; avr-objdump -D -m $(TARGET_ARCH) -s $(KOHDE_ELF))
 	test -f $(KOHDEBIN) && (echo; echo BIN; od -A x --endian=big -t x1 $(KOHDEBIN))
 
@@ -130,11 +160,10 @@ send: $(KOHDEBIN)
 	avrdude -c usbtiny -p $(MMCU) -n -U signature:r:/dev/null
 	avrdude -c usbtiny -p $(MMCU) -U flash:w:$(KOHDEBIN):a
 
-#########################################################################
-#
+
+################################################################################
 # Koodin kääntö ja linkkaustargetit
-#
-#########################################################################
+
 
 # Binäärin muodostus elffistä kopiointiohjelmalla
 $(KOHDEBIN): $(KOHDE_ELF)
